@@ -3,9 +3,9 @@ const ctx = canvas.getContext('2d');
 const scoreElement = document.getElementById('score');
 
 let width, height;
-let ball = { x: 0, y: 0, radius: 12, color: '#2ecc71' };
-let path = [];
-let targetDirection = 1; // 1 for down-right, -1 for up-right
+let ball = { x: 0, y: 0, vy: 0, radius: 12, color: '#2ecc71' };
+let path = []; // Points defining the zigzag floor
+let currentPathDir = 1; // 1 for down-right, -1 for up-right
 let gameStarted = false;
 let score = 0;
 let speed = 4;
@@ -28,20 +28,17 @@ function initGame() {
     offsetX = 0;
     ball.x = 100;
     ball.y = height / 2;
-    targetDirection = 1;
-    path = [];
+    ball.vy = 0;
+    currentPathDir = 1;
+    path = [{ x: 0, y: height / 2 }];
     
-    // Initial path point
+    // Generate initial path segments
     let lastX = 0;
-    let lastY = height / 2;
-    path.push({ x: lastX, y: lastY });
-
-    // Generate initial segments
-    for (let i = 0; i < 20; i++) {
-        addRandomSegment();
+    while (lastX < width * 2) {
+        lastX = addRandomSegment();
     }
     
-    // Position ball on path
+    // Position ball on the floor
     const initialY = getPathY(ball.x);
     if (initialY !== null) {
         ball.y = initialY - ball.radius;
@@ -53,19 +50,53 @@ function initGame() {
 
 function addRandomSegment() {
     const lastPoint = path[path.length - 1];
-    // Random length for zigzag segments
-    const segmentLength = Math.random() * 200 + 100; 
-    // Alternate direction of the path segments
-    const dir = path.length % 2 === 0 ? 1 : -1;
+    const segmentLength = Math.random() * 200 + 100; // Random length segments
     
     const newX = lastPoint.x + segmentLength;
-    const newY = lastPoint.y + (segmentLength * dir * 0.7); // 0.7 slope
+    let newY = lastPoint.y + (segmentLength * currentPathDir * 0.7);
     
-    // Keep path within bounds
-    if (newY < 150 || newY > height - 150) {
-        path.push({ x: newX, y: lastPoint.y - (segmentLength * dir * 0.7) });
-    } else {
-        path.push({ x: newX, y: newY });
+    // Safety check: Keep path within vertical bounds
+    if (newY < 100 || newY > height - 100) {
+        currentPathDir *= -1;
+        newY = lastPoint.y + (segmentLength * currentPathDir * 0.7);
+    }
+
+    path.push({ x: newX, y: newY });
+    currentPathDir *= -1; // Toggle for next segment
+    return newX;
+}
+
+// When user presses space, we flip the path direction from the ball's current position
+function togglePathDirection() {
+    const ballX = ball.x;
+    const ballY = getPathY(ballX);
+    
+    // 1. Find the index where the ball is
+    let segmentIndex = -1;
+    for (let i = 0; i < path.length - 1; i++) {
+        if (ballX >= path[i].x && ballX <= path[i+1].x) {
+            segmentIndex = i;
+            break;
+        }
+    }
+
+    if (segmentIndex !== -1) {
+        // 2. Remove all points after the current segment
+        path.splice(segmentIndex + 1);
+        
+        // 3. Flip direction based on what the ball was doing
+        const prevPoint = path[segmentIndex];
+        const wasGoingDown = ballY > prevPoint.y;
+        
+        // Start new direction from ball's current position
+        path.push({ x: ballX, y: ballY });
+        currentPathDir = wasGoingDown ? -1 : 1;
+        
+        // Generate new segments ahead
+        let lastX = ballX;
+        for (let i = 0; i < 20; i++) {
+            lastX = addRandomSegment();
+        }
     }
 }
 
@@ -78,43 +109,24 @@ function getPathY(x) {
             return p1.y + t * (p2.y - p1.y);
         }
     }
-    return null;
+    return path[path.length - 1].y;
 }
 
 function update() {
     if (!gameStarted) return;
 
-    // Ball moves right at constant speed
+    // Ball moves right
     ball.x += speed;
 
-    // Vertical movement is determined by targetDirection (toggled by Space)
-    // The ball tries to move at a 0.7 slope in the targetDirection
-    const targetVY = speed * targetDirection * 0.7;
-    
-    // Gravity always pulls down
-    const gravityEffect = gravity;
-    
-    // Apply vertical movement
-    ball.y += targetVY + gravityEffect;
+    // Gravity pulls ball down
+    ball.vy += gravity;
+    ball.y += ball.vy;
 
+    // Floor constraint: Ball cannot fall below the floor
     const floorY = getPathY(ball.x);
-    
-    if (floorY !== null) {
-        // CONSTRAINT: Ball cannot fall below the path
-        if (ball.y > floorY - ball.radius) {
-            ball.y = floorY - ball.radius;
-        }
-
-        // GAME OVER: If the ball flies too high away from the path
-        // This happens if the player's direction is UP while the path is DOWN
-        if (ball.y < floorY - 250) {
-            gameOver();
-            return;
-        }
-    } else {
-        // Should not happen with continuous generation
-        gameOver();
-        return;
+    if (ball.y > floorY - ball.radius) {
+        ball.y = floorY - ball.radius;
+        ball.vy = 0; 
     }
 
     // Scrolling
@@ -122,15 +134,17 @@ function update() {
         offsetX = ball.x - width / 3;
     }
 
-    // Path generation
-    const lastPoint = path[path.length - 1];
-    if (lastPoint.x < ball.x + width) {
+    // Path maintenance
+    if (path[path.length - 1].x < ball.x + width) {
         addRandomSegment();
     }
-
-    // Cleanup
-    if (path.length > 50) {
+    if (path.length > 50 && path[1].x < ball.x - width) {
         path.shift();
+    }
+
+    // Game Over: Ball goes off screen
+    if (ball.y < -50 || ball.y > height + 50) {
+        gameOver();
     }
 
     score += 0.1;
@@ -141,7 +155,7 @@ function update() {
 function draw() {
     ctx.clearRect(0, 0, width, height);
 
-    // Draw solid ground below path
+    // Draw Floor Fill
     if (path.length > 0) {
         ctx.beginPath();
         ctx.moveTo(path[0].x - offsetX, path[0].y);
@@ -150,17 +164,17 @@ function draw() {
         }
         ctx.lineTo(path[path.length-1].x - offsetX, height);
         ctx.lineTo(path[0].x - offsetX, height);
-        ctx.fillStyle = '#ecf0f1';
+        ctx.fillStyle = '#dfe6e9';
         ctx.fill();
         ctx.closePath();
     }
 
-    // Draw the Path line
+    // Draw Floor Line
     ctx.beginPath();
-    ctx.lineWidth = 6;
+    ctx.lineWidth = 4;
+    ctx.strokeStyle = '#2d3436';
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
-    ctx.strokeStyle = '#34495e';
     if (path.length > 0) {
         ctx.moveTo(path[0].x - offsetX, path[0].y);
         for (let i = 1; i < path.length; i++) {
@@ -183,13 +197,11 @@ function draw() {
         ctx.fillStyle = 'rgba(0,0,0,0.6)';
         ctx.fillRect(0, 0, width, height);
         ctx.fillStyle = 'white';
-        ctx.font = 'bold 32px sans-serif';
+        ctx.font = 'bold 36px sans-serif';
         ctx.textAlign = 'center';
-        ctx.fillText('Zigzag Runner 2D', width / 2, height / 2 - 40);
+        ctx.fillText('Floor Steer Zigzag', width / 2, height / 2 - 20);
         ctx.font = '24px sans-serif';
-        ctx.fillText('Press SPACE to toggle Direction', width / 2, height / 2 + 20);
-        ctx.font = '18px sans-serif';
-        ctx.fillText('(Up-Right / Down-Right)', width / 2, height / 2 + 50);
+        ctx.fillText('Press SPACE to Flip Path Direction', width / 2, height / 2 + 30);
     }
 }
 
@@ -214,7 +226,7 @@ window.addEventListener('keydown', (e) => {
         if (!gameStarted) {
             gameStarted = true;
         } else {
-            targetDirection *= -1; // Toggle direction (1 <-> -1)
+            togglePathDirection();
         }
         e.preventDefault();
     }
