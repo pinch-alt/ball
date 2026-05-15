@@ -1,145 +1,176 @@
-const scene = new THREE.Scene();
-const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
-const renderer = new THREE.WebGLRenderer({ canvas: document.getElementById('game-canvas'), antialias: true });
-renderer.setSize(window.innerWidth, window.innerHeight);
-renderer.setClearColor(0xf0f0f0);
-
-// Set initial camera position
-camera.position.set(-5, 5, 5);
-camera.lookAt(0, 0, 0);
-
-const ballGeometry = new THREE.SphereGeometry(0.2, 32, 32);
-const ballMaterial = new THREE.MeshStandardMaterial({ color: 0x2ecc71 }); // Green ball, reacts to light
-const ball = new THREE.Mesh(ballGeometry, ballMaterial);
-scene.add(ball);
-
-const pathGroup = new THREE.Group();
-scene.add(pathGroup);
-
-let score = 0;
+const canvas = document.getElementById('game-canvas');
+const ctx = canvas.getContext('2d');
 const scoreElement = document.getElementById('score');
 
-let ballLane = 0; // 0 for left path, 1 for right path
-let ballY = 0.5;
-let ballSpeedX = 0.05;
-let cameraSpeed = 0.05;
+let width, height;
+let ball = { x: 0, y: 0, radius: 10, color: '#2ecc71' };
+let path = [];
+let direction = 1; // 1 for down-right (diagonal), -1 for up-right (diagonal)
 let gameStarted = false;
+let score = 0;
+let speed = 2;
+let offsetX = 0; // To handle scrolling
 
-// Add lighting
-const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
-scene.add(ambientLight);
-const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
-directionalLight.position.set(5, 10, 7.5);
-scene.add(directionalLight);
-
-function createPathSegment(x, z, index) {
-    const segmentGeometry = new THREE.BoxGeometry(1.2, 0.1, 1.2); // Slightly larger segments
-    const segmentMaterial = new THREE.MeshStandardMaterial({ 
-        color: index % 2 === 0 ? 0xe74c3c : 0x3498db, // Red and Blue
-        roughness: 0.8,
-        metalness: 0.2
-    });
-    const segment = new THREE.Mesh(segmentGeometry, segmentMaterial);
-    segment.position.set(x, 0, z);
-    pathGroup.add(segment);
+function resize() {
+    width = window.innerWidth;
+    height = window.innerHeight;
+    canvas.width = width;
+    canvas.height = height;
+    if (!gameStarted) {
+        initGame();
+    }
 }
 
-function resetGame() {
-    ball.position.set(0, 0.5, -0.5);
-    ballY = 0.5;
-    ballLane = 0;
+function initGame() {
     score = 0;
-    cameraSpeed = 0.05;
+    speed = 2;
+    offsetX = 0;
+    ball.x = 50;
+    ball.y = height / 2;
+    direction = 1;
+    path = [];
     
-    // Clear existing path and create a new one
-    while(pathGroup.children.length > 0){
-        pathGroup.remove(pathGroup.children[0]);
+    // Initial path point
+    let lastX = 0;
+    let lastY = height / 2;
+    path.push({ x: lastX, y: lastY });
+
+    // Generate initial segments
+    for (let i = 0; i < 20; i++) {
+        addRandomSegment();
     }
-    for (let i = 0; i < 30; i++) {
-        createPathSegment(i * 1, i % 2 === 0 ? -0.5 : 0.5, i);
-    }
-    gameStarted = true;
+    
+    updateScore();
+    draw();
 }
 
-function animate() {
-    requestAnimationFrame(animate);
+function addRandomSegment() {
+    const lastPoint = path[path.length - 1];
+    const segmentLength = Math.random() * 100 + 50; // Random length between 50 and 150
+    // Alternating directions automatically for the initial path generation
+    const dir = path.length % 2 === 0 ? 1 : -1;
+    
+    const newX = lastPoint.x + segmentLength;
+    const newY = lastPoint.y + (segmentLength * dir);
+    
+    path.push({ x: newX, y: newY });
+}
 
-    if (gameStarted) {
-        // Move ball forward
-        ball.position.x += cameraSpeed;
+function update() {
+    if (!gameStarted) return;
 
-        // Move ball between lanes smoothly
-        const targetZ = ballLane === 0 ? -0.5 : 0.5;
-        ball.position.z += (targetZ - ball.position.z) * 0.1;
+    // Ball always moves right
+    ball.x += speed;
+    // Vertical movement based on current direction
+    ball.y += speed * direction;
 
-        // Camera follow
-        camera.position.x = ball.position.x - 5;
-        camera.position.y = 5;
-        camera.position.z = 5;
-        camera.lookAt(ball.position.x + 2, 0, 0);
-
-        // Generate new path segments
-        const lastSegment = pathGroup.children[pathGroup.children.length - 1];
-        if (ball.position.x > lastSegment.position.x - 20) {
-            const newIndex = pathGroup.children.length;
-            createPathSegment(lastSegment.position.x + 1, lastSegment.position.z === -0.5 ? 0.5 : -0.5, newIndex);
-        }
-        
-        // Remove old segments
-        if (pathGroup.children.length > 50) {
-            pathGroup.remove(pathGroup.children[0]);
-        }
-
-        // Check for falling
-        const onPath = pathGroup.children.some(segment => {
-            const dx = Math.abs(ball.position.x - segment.position.x);
-            const dz = Math.abs(ball.position.z - segment.position.z);
-            return dx < 0.6 && dz < 0.6; // Improved collision detection
-        });
-
-        if (!onPath) {
-            ballY -= 0.1;
-            ball.position.y = ballY;
-        }
-
-        // Game over conditions
-        if (ball.position.y < -5) {
-            gameStarted = false;
-            alert('Game Over! Your score: ' + Math.floor(score));
-            location.reload(); // Simple way to reset everything
-        }
-
-        // Update score
-        score += cameraSpeed * 10;
-        scoreElement.innerText = 'Score: ' + Math.floor(score);
-        
-        // Gradually increase speed
-        cameraSpeed += 0.00005;
+    // Scrolling: keep the ball roughly in the first 1/3 of the screen
+    if (ball.x - offsetX > width / 3) {
+        offsetX = ball.x - width / 3;
     }
 
-    renderer.render(scene, camera);
+    // Check if ball is still "on path"
+    if (!isBallOnPath()) {
+        gameOver();
+    }
+
+    // Generate more path if needed
+    const lastPoint = path[path.length - 1];
+    if (lastPoint.x < ball.x + width) {
+        addRandomSegment();
+    }
+
+    // Cleanup old path points
+    if (path.length > 50) {
+        path.shift();
+    }
+
+    score += 0.1;
+    updateScore();
+    speed += 0.0005; // Gradually increase speed
+}
+
+function isBallOnPath() {
+    // Check which segment the ball is currently in
+    for (let i = 0; i < path.length - 1; i++) {
+        const p1 = path[i];
+        const p2 = path[i+1];
+        
+        if (ball.x >= p1.x && ball.x <= p2.x) {
+            // Linear interpolation to find expected Y at ball.x
+            const t = (ball.x - p1.x) / (p2.x - p1.x);
+            const expectedY = p1.y + t * (p2.y - p1.y);
+            
+            // Margin of error (path width)
+            return Math.abs(ball.y - expectedY) < 20;
+        }
+    }
+    return false;
+}
+
+function draw() {
+    ctx.clearRect(0, 0, width, height);
+
+    // Draw Path
+    ctx.beginPath();
+    ctx.lineWidth = 30;
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    ctx.strokeStyle = '#bdc3c7';
+    
+    if (path.length > 0) {
+        ctx.moveTo(path[0].x - offsetX, path[0].y);
+        for (let i = 1; i < path.length; i++) {
+            ctx.lineTo(path[i].x - offsetX, path[i].y);
+        }
+    }
+    ctx.stroke();
+
+    // Draw Ball
+    ctx.beginPath();
+    ctx.arc(ball.x - offsetX, ball.y, ball.radius, 0, Math.PI * 2);
+    ctx.fillStyle = ball.color;
+    ctx.fill();
+    ctx.closePath();
+
+    if (!gameStarted) {
+        ctx.fillStyle = 'rgba(0,0,0,0.5)';
+        ctx.fillRect(0, 0, width, height);
+        ctx.fillStyle = 'white';
+        ctx.font = '30px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText('Press Space to Start', width / 2, height / 2);
+    }
+}
+
+function updateScore() {
+    scoreElement.innerText = 'Score: ' + Math.floor(score);
+}
+
+function gameOver() {
+    gameStarted = false;
+    alert('Game Over! Score: ' + Math.floor(score));
+    initGame();
+}
+
+function loop() {
+    update();
+    draw();
+    requestAnimationFrame(loop);
 }
 
 window.addEventListener('keydown', (e) => {
     if (e.code === 'Space') {
         if (!gameStarted) {
-            resetGame();
+            gameStarted = true;
         } else {
-            ballLane = 1 - ballLane; // Switch lane
+            direction *= -1; // Switch direction: down-right <-> up-right
         }
+        e.preventDefault();
     }
 });
 
-window.addEventListener('resize', () => {
-    camera.aspect = window.innerWidth / window.innerHeight;
-    camera.updateProjectionMatrix();
-    renderer.setSize(window.innerWidth, window.innerHeight);
-});
+window.addEventListener('resize', resize);
 
-// Create initial visible path segments even before starting
-for (let i = 0; i < 10; i++) {
-    createPathSegment(i * 1, i % 2 === 0 ? -0.5 : 0.5, i);
-}
-ball.position.set(0, 0.5, -0.5);
-
-animate();
+resize();
+loop();
