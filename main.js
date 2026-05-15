@@ -3,13 +3,14 @@ const ctx = canvas.getContext('2d');
 const scoreElement = document.getElementById('score');
 
 let width, height;
-let ball = { x: 0, y: 0, radius: 10, color: '#2ecc71' };
+let ball = { x: 0, y: 0, vy: 0, radius: 12, color: '#2ecc71' };
 let path = [];
-let direction = 1; // 1 for down-right (diagonal), -1 for up-right (diagonal)
+let direction = 1; // 1 for down-right, -1 for up-right
 let gameStarted = false;
 let score = 0;
-let speed = 2;
-let offsetX = 0; // To handle scrolling
+let speed = 3;
+let gravity = 0.5;
+let offsetX = 0;
 
 function resize() {
     width = window.innerWidth;
@@ -23,10 +24,11 @@ function resize() {
 
 function initGame() {
     score = 0;
-    speed = 2;
+    speed = 3;
     offsetX = 0;
-    ball.x = 50;
+    ball.x = 100;
     ball.y = height / 2;
+    ball.vy = 0;
     direction = 1;
     path = [];
     
@@ -40,83 +42,118 @@ function initGame() {
         addRandomSegment();
     }
     
+    // Position ball on the first segment
+    const initialY = getPathY(ball.x);
+    if (initialY !== null) {
+        ball.y = initialY - ball.radius;
+    }
+    
     updateScore();
     draw();
 }
 
 function addRandomSegment() {
     const lastPoint = path[path.length - 1];
-    const segmentLength = Math.random() * 100 + 50; // Random length between 50 and 150
-    // Alternating directions automatically for the initial path generation
+    const segmentLength = Math.random() * 150 + 100; // Longer segments for 2D feel
     const dir = path.length % 2 === 0 ? 1 : -1;
     
     const newX = lastPoint.x + segmentLength;
-    const newY = lastPoint.y + (segmentLength * dir);
+    // Slope is around 45 degrees or less
+    const newY = lastPoint.y + (segmentLength * dir * 0.6);
     
-    path.push({ x: newX, y: newY });
+    // Keep path within screen vertical bounds
+    if (newY < 100 || newY > height - 100) {
+        path.push({ x: newX, y: lastPoint.y - (segmentLength * dir * 0.6) });
+    } else {
+        path.push({ x: newX, y: newY });
+    }
+}
+
+function getPathY(x) {
+    for (let i = 0; i < path.length - 1; i++) {
+        const p1 = path[i];
+        const p2 = path[i+1];
+        if (x >= p1.x && x <= p2.x) {
+            const t = (x - p1.x) / (p2.x - p1.x);
+            return p1.y + t * (p2.y - p1.y);
+        }
+    }
+    return null;
 }
 
 function update() {
     if (!gameStarted) return;
 
-    // Ball always moves right
+    // Ball moves right
     ball.x += speed;
-    // Vertical movement based on current direction
-    ball.y += speed * direction;
 
-    // Scrolling: keep the ball roughly in the first 1/3 of the screen
+    // Gravity acts on the ball
+    ball.vy += gravity;
+    
+    // Apply direction (upward or downward force/velocity)
+    // If direction is -1 (up), we apply an upward force to overcome gravity
+    if (direction === -1) {
+        ball.vy -= gravity * 2.2; // Move up
+    } else {
+        ball.vy += gravity * 0.5; // Move down faster
+    }
+
+    // Limit vertical velocity
+    ball.vy = Math.max(Math.min(ball.vy, 10), -10);
+    
+    ball.y += ball.vy;
+
+    const floorY = getPathY(ball.x);
+    
+    if (floorY !== null) {
+        // CONSTRAINT: Ball cannot fall below the zigzag
+        if (ball.y > floorY - ball.radius) {
+            ball.y = floorY - ball.radius;
+            ball.vy = 0;
+        }
+    }
+
+    // Scrolling
     if (ball.x - offsetX > width / 3) {
         offsetX = ball.x - width / 3;
     }
 
-    // Check if ball is still "on path"
-    if (!isBallOnPath()) {
+    // GAME OVER conditions
+    // 1. If ball goes off the path
+    if (floorY === null) {
         gameOver();
+        return;
+    }
+    // 2. If ball flies too high above the path (lost control)
+    if (ball.y < floorY - 300) {
+        gameOver();
+        return;
     }
 
-    // Generate more path if needed
+    // Generate more path
     const lastPoint = path[path.length - 1];
     if (lastPoint.x < ball.x + width) {
         addRandomSegment();
     }
 
-    // Cleanup old path points
     if (path.length > 50) {
         path.shift();
     }
 
     score += 0.1;
     updateScore();
-    speed += 0.0005; // Gradually increase speed
-}
-
-function isBallOnPath() {
-    // Check which segment the ball is currently in
-    for (let i = 0; i < path.length - 1; i++) {
-        const p1 = path[i];
-        const p2 = path[i+1];
-        
-        if (ball.x >= p1.x && ball.x <= p2.x) {
-            // Linear interpolation to find expected Y at ball.x
-            const t = (ball.x - p1.x) / (p2.x - p1.x);
-            const expectedY = p1.y + t * (p2.y - p1.y);
-            
-            // Margin of error (path width)
-            return Math.abs(ball.y - expectedY) < 20;
-        }
-    }
-    return false;
+    speed += 0.0005;
 }
 
 function draw() {
     ctx.clearRect(0, 0, width, height);
 
-    // Draw Path
+    // Draw Path (the ground)
     ctx.beginPath();
-    ctx.lineWidth = 30;
+    ctx.lineWidth = 10;
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
-    ctx.strokeStyle = '#bdc3c7';
+    ctx.strokeStyle = '#34495e';
     
     if (path.length > 0) {
         ctx.moveTo(path[0].x - offsetX, path[0].y);
@@ -126,20 +163,39 @@ function draw() {
     }
     ctx.stroke();
 
+    // Draw a "shadow" or fill below the path to make it look like solid ground
+    if (path.length > 0) {
+        ctx.beginPath();
+        ctx.moveTo(path[0].x - offsetX, path[0].y);
+        for (let i = 1; i < path.length; i++) {
+            ctx.lineTo(path[i].x - offsetX, path[i].y);
+        }
+        ctx.lineTo(path[path.length-1].x - offsetX, height);
+        ctx.lineTo(path[0].x - offsetX, height);
+        ctx.fillStyle = '#ecf0f1';
+        ctx.fill();
+        ctx.closePath();
+    }
+
     // Draw Ball
     ctx.beginPath();
     ctx.arc(ball.x - offsetX, ball.y, ball.radius, 0, Math.PI * 2);
     ctx.fillStyle = ball.color;
+    ctx.shadowBlur = 10;
+    ctx.shadowColor = 'rgba(0,0,0,0.2)';
     ctx.fill();
     ctx.closePath();
+    ctx.shadowBlur = 0;
 
     if (!gameStarted) {
         ctx.fillStyle = 'rgba(0,0,0,0.5)';
         ctx.fillRect(0, 0, width, height);
         ctx.fillStyle = 'white';
-        ctx.font = '30px sans-serif';
+        ctx.font = 'bold 30px sans-serif';
         ctx.textAlign = 'center';
         ctx.fillText('Press Space to Start', width / 2, height / 2);
+        ctx.font = '20px sans-serif';
+        ctx.fillText('Hold Space to move UP, Release to fall DOWN', width / 2, height / 2 + 40);
     }
 }
 
@@ -164,9 +220,15 @@ window.addEventListener('keydown', (e) => {
         if (!gameStarted) {
             gameStarted = true;
         } else {
-            direction *= -1; // Switch direction: down-right <-> up-right
+            direction = -1; // Switch to "UP"
         }
         e.preventDefault();
+    }
+});
+
+window.addEventListener('keyup', (e) => {
+    if (e.code === 'Space') {
+        direction = 1; // Switch to "DOWN"
     }
 });
 
